@@ -1,7 +1,10 @@
 import base64
 import requests
 import json
-from .config import MIDSCENE_MODEL_NAME, OPENAI_BASE_URL, OPENAI_API_KEY
+from .config import (
+    MIDSCENE_MODEL_NAME, OPENAI_BASE_URL, OPENAI_API_KEY,
+    LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT
+)
 
 class OCRUtils:
     def __init__(self):
@@ -14,37 +17,38 @@ class OCRUtils:
         }
     
     def encode_image(self, image_path):
-        """将图片编码为base64格式"""
+        """Encode an image as base64"""
         with open(image_path, "rb") as image_file:
             return base64.b64encode(image_file.read()).decode('utf-8')
     
     def analyze_order_screenshot(self, image_path):
         """
-        分析订单截图，提取所有订单信息
-        返回解析后的所有订单数据列表
+        Analyze an order screenshot and extract every order in it.
+        Returns the list of parsed orders.
         """
         try:
-            # 编码图片
+            # Encode the image
             base64_image = self.encode_image(image_path)
             
-            # 构建提示信息 - 修改为提取所有订单信息
+            # Build the prompt - extract all orders
             prompt = """
-            请仔细分析这张购物订单截图，提取其中所有订单的信息并以JSON格式返回。
-            如果截图中包含多个订单，请返回一个订单对象的数组。每个订单应包含以下信息：
-            - 订单号
-            - 订单日期
-            - 商品名称列表（每个商品包括名称、数量、单价、小计）
-            - 总金额
-            - 支付方式
-            - 收货地址
-            - 收货人
-            - 联系电话
+            Carefully analyze this shopping order screenshot, extract the information of every order in it and return it as JSON.
+            If the screenshot contains several orders, return an array of order objects. Each order must use exactly these keys:
+            - "Order ID"
+            - "Order Date"
+            - "Items" (an array; each item has "Name", "Quantity", "Unit Price", "Subtotal")
+            - "Total Amount"
+            - "Payment Method"
+            - "Shipping Address"
+            - "Recipient"
+            - "Phone"
             
-            如果某些信息不存在，请对应字段值设为null。
-            确保返回的是纯JSON数组，不要有其他文本。即使只有一个订单，也请返回包含一个元素的数组。
+            If a piece of information is missing, set that field to null.
+            Return a pure JSON array with no other text. Even if there is only one order, return an array with one element.
+            Write all values in English where possible.
             """
         
-            # 构建请求数据
+            # Build the request payload
             data = {
                 "model": self.model_name,
                 "messages": [
@@ -59,27 +63,28 @@ class OCRUtils:
                 "temperature": 0.0
             }
             
-            # 发送请求
+            # Send the request
             response = requests.post(
                 f"{self.api_base}/chat/completions",
                 headers=self.headers,
-                data=json.dumps(data)
+                data=json.dumps(data),
+                timeout=(LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT)
             )
-          
+
             if response.status_code != 200:
-                return False, f"API请求失败: {response.text}"
+                return False, f"API request failed: {response.text}"
             
-            # 解析响应
+            # Parse the response
             result = response.json()
             content = result['choices'][0]['message']['content']
             
-            # 尝试解析JSON
+            # Try to parse the JSON
             try:
-                # 现在返回的是订单数组
+                # The reply is an array of orders
                 order_data = json.loads(content)
                 return True, order_data
             except json.JSONDecodeError:
-                return False, f"解析模型输出失败: {content}"
+                return False, f"Failed to parse the model output: {content}"
                 
         except Exception as e:
-            return False, f"分析图片时出错: {str(e)}"
+            return False, f"Error while analyzing the image: {str(e)}"

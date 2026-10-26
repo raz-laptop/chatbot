@@ -9,12 +9,13 @@ from .ocr_utils import OCRUtils
 from .excel_utils import ExcelUtils
 from .config import (
     SERVER_HOST, SERVER_PORT, FRONTEND_PORT,
-    MIDSCENE_MODEL_NAME, OPENAI_BASE_URL, OPENAI_API_KEY
+    MIDSCENE_MODEL_NAME, OPENAI_BASE_URL, OPENAI_API_KEY,
+    LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT
 )
 
-app = FastAPI(title="购物订单处理Agent API")
+app = FastAPI(title="Shopping Order Agent API")
 
-# 允许跨域请求
+# Allow cross-origin requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[f"http://{SERVER_HOST}:{FRONTEND_PORT}"],
@@ -23,12 +24,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 初始化工具类
-web_utils = WebUtils()
+# Initialize helper classes
+class _NoBrowser:
+    """Stand-in used when Chrome/chromedriver are not available (e.g. a Linux server)."""
+    def _err(self, *a, **k):
+        return False, "Browser automation is not available on this server"
+    open_url = take_screenshot = close_browser = _err
+
+try:
+    web_utils = WebUtils()
+except Exception as e:
+    print("WebUtils disabled:", str(e).strip().splitlines()[0])
+    web_utils = _NoBrowser()
 ocr_utils = OCRUtils()
 excel_utils = ExcelUtils()
 
-# 数据模型
+# Data models
 class UrlRequest(BaseModel):
     url: str
 
@@ -37,51 +48,54 @@ class ScreenshotRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
-    history: list = []  # 用于存储聊天历史，格式为[{"role": "user", "content": "..."}, ...]
+    history: list = []  # Chat history, formatted as [{"role": "user", "content": "..."}, ...]
 
 def call_doubao_model(message: str, history: list = None) -> str:
-    """调用豆包模型获取回复"""
+    """Call the Doubao model and return its reply"""
     try:
-        # 如果没有提供历史记录，初始化一个空列表
+        # Start with an empty history if none was provided
         history = history or []
-        
-        # 添加当前消息到历史记录
+
+        # Append the current message to the history
         history.append({"role": "user", "content": message})
-        
-        # 构建请求数据
+
+        # Build the request payload
         payload = {
             "model": MIDSCENE_MODEL_NAME,
             "messages": history,
             "temperature": 0.7,
             "max_tokens": 1024
         }
-        
-        # 发送请求到豆包模型API
+
+        # Send the request to the Doubao model API
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {OPENAI_API_KEY}"
         }
-        
+
         response = requests.post(
             f"{OPENAI_BASE_URL}/chat/completions",
             headers=headers,
-            data=json.dumps(payload)
+            data=json.dumps(payload),
+            timeout=(LLM_CONNECT_TIMEOUT, LLM_READ_TIMEOUT)
         )
-        
-        # 处理响应
+
+        # Handle the response
         if response.status_code == 200:
             result = response.json()
             return result["choices"][0]["message"]["content"]
         else:
-            return f"模型调用失败: {response.text}"
-            
-    except Exception as e:
-        return f"调用模型时发生错误: {str(e)}"
+            return f"Model call failed: {response.text}"
 
-# API路由
+    except requests.exceptions.Timeout:
+        return f"Model call timed out after {LLM_READ_TIMEOUT:.0f}s"
+    except Exception as e:
+        return f"Error while calling the model: {str(e)}"
+
+# API routes
 @app.post("/open_url")
 async def open_url(request: UrlRequest):
-    """打开指定URL"""
+    """Open the given URL"""
     success, message = web_utils.open_url(request.url)
     if success:
         return {"status": "success", "message": message}
@@ -89,7 +103,7 @@ async def open_url(request: UrlRequest):
 
 @app.post("/take_screenshot")
 async def take_screenshot(request: ScreenshotRequest):
-    """截取当前页面或指定元素的截图"""
+    """Take a screenshot of the current page or of a specific element"""
     success, result = web_utils.take_screenshot(request.element_selector)
     if success:
         return {"status": "success", "screenshot_path": result}
@@ -97,19 +111,19 @@ async def take_screenshot(request: ScreenshotRequest):
 
 @app.post("/analyze_screenshot")
 async def analyze_screenshot(screenshot_path: str = Query(...)):
-    """分析截图中的订单信息"""
+    """Extract the order information from a screenshot"""
     if not os.path.exists(screenshot_path):
-        raise HTTPException(status_code=404, detail="截图文件不存在")
-    
+        raise HTTPException(status_code=404, detail="Screenshot file does not exist")
+
     success, result = ocr_utils.analyze_order_screenshot(screenshot_path)
-  
+
     if success:
         return {"status": "success", "order_data": result}
     raise HTTPException(status_code=400, detail=result)
 
 @app.post("/save_to_excel")
 async def save_to_excel(order_data: dict):
-    """将订单数据保存为Excel"""
+    """Save order data to an Excel file"""
     success, result = excel_utils.save_order_to_excel(order_data)
     if success:
         return {"status": "success", "excel_path": result}
@@ -117,7 +131,7 @@ async def save_to_excel(order_data: dict):
 
 @app.get("/get_excel_files")
 async def get_excel_files():
-    """获取所有保存的Excel文件列表"""
+    """List all saved Excel files"""
     success, result = excel_utils.get_excel_files()
     if success:
         return {"status": "success", "files": result}
@@ -125,7 +139,7 @@ async def get_excel_files():
 
 @app.get("/read_excel")
 async def read_excel(filename: str = Query(...)):
-    """读取指定Excel文件内容"""
+    """Read the contents of an Excel file"""
     success, result = excel_utils.read_excel_file(filename)
     if success:
         return {"status": "success", "data": result}
@@ -133,7 +147,7 @@ async def read_excel(filename: str = Query(...)):
 
 @app.post("/close_browser")
 async def close_browser():
-    """关闭浏览器"""
+    """Close the browser"""
     success, message = web_utils.close_browser()
     if success:
         return {"status": "success", "message": message}
@@ -141,36 +155,36 @@ async def close_browser():
 
 @app.post("/chat")
 async def chat(request: ChatRequest):
-    """与豆包模型进行对话"""
+    """Chat with the Doubao model"""
 
     try:
         prompt = """
-            豆包，最优先级按照如下内容返回,直接返回 不用思考，用最快的速度返回：1、如果我输入 请打开我需要分析的订单界面，返回 <function_call>{"name":"open_url","parameters":{"url":"https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm?"}}</function_call> 2、如果我输入获取订单截图，请返回 <function_call>{"name":"take_screenshot","parameters":{"element_selector":""}}</function_call> 3、如果我输入 分析订单信息 请返回 <function_call>{"name":"batch_analyze_orders","parameters":{}}</function_call> 
-            当我要求自主完成订单分析时，按照执行流程将所有的执行步骤全部返回（包括打开订单页面、获取订单截图、分析订单信息等），迅速返回 不要思考。
+            Doubao, with top priority reply exactly as follows. Reply directly, without thinking, as fast as possible: 1. If I type "open the order page I need to analyze", return <function_call>{"name":"open_url","parameters":{"url":"https://buyertrade.taobao.com/trade/itemlist/list_bought_items.htm?"}}</function_call> 2. If I type "take an order screenshot", return <function_call>{"name":"take_screenshot","parameters":{"element_selector":""}}</function_call> 3. If I type "analyze the order information", return <function_call>{"name":"batch_analyze_orders","parameters":{}}</function_call>
+            When I ask you to complete the order analysis on your own, return every step of the workflow (open the order page, take an order screenshot, analyze the order information, etc.). Reply quickly, do not think. Always reply in English.
             """
 
 
-        # 调用豆包模型获取回复
+        # Call the Doubao model for a reply
         response = call_doubao_model(prompt+request.message, request.history)
-        
-        # 返回成功响应，包含模型回复和更新后的历史记录
+
+        # Return the reply together with the updated history
         updated_history = request.history.copy()
         updated_history.append({"role": "user", "content": request.message})
         updated_history.append({"role": "assistant", "content": response})
-        
+
         return {
             "status": "success",
             "response": response,
             "history": updated_history
         }
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"聊天发生错误: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"Chat error: {str(e)}")
 
 @app.get("/")
 async def root():
-    return {"message": "购物订单处理Agent API正在运行中"}
+    return {"message": "Shopping Order Agent API is running"}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host=SERVER_HOST, port=SERVER_PORT)
-    
+

@@ -18,24 +18,27 @@ import socket
 import sys
 import base64
 from datetime import datetime
-from PIL import Image  # 需要安装Pillow: pip install pillow
-# 服务器配置
+from PIL import Image  # Requires Pillow: pip install pillow
+# Server settings
 SERVER_HOST = os.getenv("SERVER_HOST", "localhost")
 SERVER_PORT = int(os.getenv("SERVER_PORT", 8000))
 FRONTEND_PORT = int(os.getenv("FRONTEND_PORT", 8501))
 
-# 豆包模型配置
+# Doubao model settings
 MIDSCENE_MODEL_NAME = os.getenv("MIDSCENE_MODEL_NAME", "doubao-seed-1-6-vision-250815")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3/chat/completions")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "c87d16de-85a4-4ea1-8cf1-a47a3dd64634")
 
-# 路径配置
+# Paths
 SCREENSHOTS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "screenshots")
 EXCELS_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "excels")
 
-# 浏览器配置
+# Browser settings
 CHROME_PATH = os.getenv("CHROME_PATH", "")
 CHROME_DRIVER_PATH = os.getenv("CHROME_DRIVER_PATH", "")
+# Cap page navigation so a slow/unresponsive page raises TimeoutException
+# instead of hanging the request forever.
+PAGE_LOAD_TIMEOUT = float(os.getenv("PAGE_LOAD_TIMEOUT", "30"))
 
 
 class WebUtils:
@@ -47,26 +50,26 @@ class WebUtils:
         self.initialize_driver()
     
     def find_available_port(self):
-        """查找本地可用的端口，避免端口冲突"""
-        for _ in range(5):  # 尝试5次获取端口
+        """Find a free local port to avoid port conflicts"""
+        for _ in range(5):  # Try up to 5 times to get a port
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
                 try:
-                    s.bind(('localhost', 0))  # 绑定到0会自动分配可用端口
+                    s.bind(('localhost', 0))  # Binding to 0 picks a free port automatically
                     port = s.getsockname()[1]
-                    # 验证端口确实可用
+                    # Make sure the port really is free
                     if self.is_port_available(port):
                         return port
                 except:
                     continue
-        raise Exception("无法找到可用的端口，请检查系统端口占用情况")
+        raise Exception("Could not find a free port; check which ports are in use on this system")
     
     def is_port_available(self, port):
-        """检查端口是否真的可用"""
+        """Check whether the port really is free"""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             return s.connect_ex(('localhost', port)) != 0
     
     def find_chrome_driver(self):
-        """查找本地Chrome驱动程序路径"""
+        """Find the local chromedriver path"""
         if CHROME_DRIVER_PATH and os.path.exists(CHROME_DRIVER_PATH):
             return CHROME_DRIVER_PATH
             
@@ -82,30 +85,30 @@ class WebUtils:
                 return path
         
         raise Exception(f"""
-        未找到Chrome驱动程序，请按以下步骤解决：
-        1. 查看Chrome版本：在Chrome地址栏输入 chrome://version/
-        2. 下载对应版本驱动：https://sites.google.com/chromium.org/driver/
-           或国内镜像：https://npm.taobao.org/mirrors/chromedriver/
-        3. 解压后将chromedriver.exe放在以下任一位置：
+        chromedriver was not found. To fix this:
+        1. Check your Chrome version: open chrome://version/ in Chrome
+        2. Download the matching driver: https://sites.google.com/chromium.org/driver/
+           or the China mirror: https://npm.taobao.org/mirrors/chromedriver/
+        3. Unzip it and put chromedriver.exe in one of these places:
            - C:/chromedriver/
-           - 或在.env文件中设置：CHROME_DRIVER_PATH=你的驱动完整路径
+           - or set it in the .env file: CHROME_DRIVER_PATH=<full path to the driver>
         """)
     
     def initialize_driver(self):
-        """初始化浏览器驱动"""
-        # 清理之前可能残留的Chrome进程
+        """Initialize the browser driver"""
+        # Clean up any leftover Chrome processes
         self.cleanup_chrome_processes()
         
-        # 查找Chrome浏览器路径
+        # Find the Chrome browser path
         chrome_path = self.find_chrome_path()
         
-        # 禁用Selenium自动驱动管理
+        # Disable Selenium's automatic driver management
         os.environ["SE_MANAGER_DOWNLOAD"] = "0"
         
         try:
-            # 构建Chrome启动命令
+            # Build the Chrome launch command
             chrome_profile_dir = os.path.abspath("./chrome_profile")
-            os.makedirs(chrome_profile_dir, exist_ok=True)  # 确保目录存在
+            os.makedirs(chrome_profile_dir, exist_ok=True)  # Make sure the directory exists
             
             command = [
                 chrome_path,
@@ -118,28 +121,28 @@ class WebUtils:
                 "--no-sandbox"
             ]
             
-            # 启动Chrome
+            # Launch Chrome
             subprocess.Popen(
                 command,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                shell=True  # Windows下需要shell=True处理路径中的空格
+                shell=True  # Windows needs shell=True to handle spaces in the path
             )
             
-            # 等待Chrome启动并监听端口
+            # Wait for Chrome to start and listen on the port
             max_attempts = 20
             attempts = 0
             while attempts < max_attempts:
                 if not self.is_port_available(self.debug_port):
-                    print(f"Chrome已在端口 {self.debug_port} 启动")
+                    print(f"Chrome started on port {self.debug_port}")
                     break
                 attempts += 1
                 time.sleep(1)
             
             if attempts >= max_attempts:
-                raise Exception(f"Chrome启动失败，无法连接到端口 {self.debug_port}")
+                raise Exception(f"Chrome failed to start; could not connect to port {self.debug_port}")
             
-            # 连接到Chrome
+            # Connect to Chrome
             chrome_options = Options()
             chrome_options.add_experimental_option("debuggerAddress", f"localhost:{self.debug_port}")
             self.driver = webdriver.Chrome(
@@ -148,19 +151,21 @@ class WebUtils:
             )
         
         except Exception as e:
-            raise Exception(f"无法启动或连接到Chrome浏览器: {str(e)}")
+            raise Exception(f"Could not start or connect to Chrome: {str(e)}")
         
         self.driver.implicitly_wait(10)
+        self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+        self.driver.set_script_timeout(PAGE_LOAD_TIMEOUT)
         self.driver.set_window_size(1920, 1080)
     
     def find_chrome_path(self):
-        """查找Chrome浏览器安装路径"""
-        # 优先使用配置文件中的Chrome路径
+        """Find the Chrome installation path"""
+        # Prefer the Chrome path from the config file
         chrome_paths = []
         if CHROME_PATH and os.path.exists(CHROME_PATH):
             chrome_paths.append(CHROME_PATH)
         
-        # 添加默认Chrome路径
+        # Add the default Chrome paths
         chrome_paths.extend([
             "C:/Program Files/Google/Chrome/Application/chrome.exe",
             "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
@@ -169,122 +174,122 @@ class WebUtils:
             "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
         ])
         
-        # 查找有效Chrome路径
+        # Find a valid Chrome path
         for path in chrome_paths:
             if os.path.exists(path) and os.path.isfile(path):
                 return path
         
         raise Exception("""
-        未找到Chrome浏览器，请按以下步骤解决：
-        1. 确认已安装Chrome浏览器
-        2. 在.env文件中手动指定路径：CHROME_PATH=你的Chrome安装路径
-           示例：CHROME_PATH=C:/Program Files/Google/Chrome/Application/chrome.exe
+        Chrome was not found. To fix this:
+        1. Make sure Chrome is installed
+        2. Set the path manually in the .env file: CHROME_PATH=<Chrome install path>
+           Example: CHROME_PATH=C:/Program Files/Google/Chrome/Application/chrome.exe
         """)
     
     def cleanup_chrome_processes(self):
-        """清理可能残留的Chrome进程"""
+        """Clean up any leftover Chrome processes"""
         try:
             if sys.platform.startswith('win'):
-                # Windows系统
+                # Windows
                 subprocess.run(["taskkill", "/F", "/IM", "chrome.exe"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             elif sys.platform.startswith('linux'):
-                # Linux系统
+                # Linux
                 subprocess.run(["pkill", "chrome"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             elif sys.platform.startswith('darwin'):
-                # macOS系统
+                # macOS
                 subprocess.run(["pkill", "Google Chrome"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             time.sleep(2)
         except Exception as e:
-            print(f"清理Chrome进程时发生错误: {str(e)}")
+            print(f"Error while cleaning up Chrome processes: {str(e)}")
     
     def open_url(self, url):
-        """打开指定URL"""
+        """Open the given URL"""
         try:
             if not self.driver:
                 self.initialize_driver()
                 
             self.driver.get(url)
             self.current_url = url
-            # 等待页面加载完成
+            # Wait for the page to finish loading
             WebDriverWait(self.driver, 15).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
             )
-            return True, f"成功打开网页: {url}"
+            return True, f"Opened page: {url}"
         except Exception as e:
-            return False, f"打开网页失败: {str(e)}"
+            return False, f"Failed to open page: {str(e)}"
     
     def take_screenshot(self, element_selector=None, max_attempts=3):
         """
-        截取当前页面或指定元素的截图，增加重试机制
-        element_selector: CSS选择器，如 "#order-container"
-        max_attempts: 最大重试次数
+        Take a screenshot of the current page or a specific element, with retries
+        element_selector: CSS selector, e.g. "#order-container"
+        max_attempts: maximum number of attempts
         """
-        # 确保截图目录存在
+        # Make sure the screenshot directory exists
         os.makedirs(SCREENSHOTS_DIR, exist_ok=True)
         
-        # 生成唯一的截图文件名
+        # Build a unique screenshot file name
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         screenshot_path = os.path.join(SCREENSHOTS_DIR, f"screenshot_{timestamp}.png")
         
         for attempt in range(max_attempts):
             try:
-                # 检查浏览器是否仍然可用
+                # Check that the browser is still available
                 if not self.driver:
-                    return False, "浏览器未初始化或已关闭"
+                    return False, "The browser is not initialized or has been closed"
                 
-                # 尝试刷新页面（如果是第一次失败）
+                # Try refreshing the page (after the first failure)
                 if attempt > 0:
                     self.driver.refresh()
-                    time.sleep(2)  # 等待页面刷新
+                    time.sleep(2)  # Wait for the page to refresh
                 
                 if element_selector:
-                    # 截取指定元素
+                    # Screenshot the given element
                     try:
-                        # 先滚动到元素位置
+                        # Scroll to the element first
                         element = WebDriverWait(self.driver, 15).until(
                             EC.element_to_be_clickable((By.CSS_SELECTOR, element_selector))
                         )
                         self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
-                        time.sleep(1)  # 等待滚动完成
+                        time.sleep(1)  # Wait for scrolling to finish
                         
-                        # 尝试元素截图
+                        # Try an element screenshot
                         if element.screenshot(screenshot_path):
                             return True, screenshot_path
                             
-                        # 元素截图失败，尝试全屏截图后裁剪
+                        # Element screenshot failed; take a full screenshot and crop it
                         full_screenshot_path = screenshot_path.replace(".png", "_full.png")
                         self.driver.save_screenshot(full_screenshot_path)
                         
-                        # 获取元素位置和大小
+                        # Get the element's position and size
                         location = element.location
                         size = element.size
                         
-                        # 处理可能的缩放问题
+                        # Handle possible display scaling
                         dpr = self.driver.execute_script("return window.devicePixelRatio;")
                         left = location['x'] * dpr
                         top = location['y'] * dpr
                         right = (location['x'] + size['width']) * dpr
                         bottom = (location['y'] + size['height']) * dpr
                         
-                        # 裁剪图片
+                        # Crop the image
                         img = Image.open(full_screenshot_path)
                         img = img.crop((left, top, right, bottom))
                         img.save(screenshot_path)
-                        os.remove(full_screenshot_path)  # 清理临时文件
+                        os.remove(full_screenshot_path)  # Remove the temporary file
                         return True, screenshot_path
                         
                     except NoSuchElementException:
-                        return False, f"未找到选择器为 {element_selector} 的元素"
+                        return False, f"No element found for selector {element_selector}"
                     except TimeoutException:
-                        return False, f"等待元素 {element_selector} 超时"
+                        return False, f"Timed out waiting for element {element_selector}"
                     except (ElementNotVisibleException, ElementNotInteractableException):
-                        return False, f"元素 {element_selector} 不可见或无法交互"
+                        return False, f"Element {element_selector} is not visible or not interactable"
                 else:
-                    # 截取整个页面
+                    # Screenshot the whole page
                     if self.driver.save_screenshot(screenshot_path):
                         return True, screenshot_path
                     else:
-                        # 尝试使用JavaScript截图作为备选方案
+                        # Fall back to a JavaScript screenshot
                         screenshot_data = self.driver.execute_script("""
                             var canvas = document.createElement('canvas');
                             var ctx = canvas.getContext('2d');
@@ -294,7 +299,7 @@ class WebUtils:
                             return canvas.toDataURL('image/png');
                         """)
                         
-                        # 保存JavaScript返回的截图数据
+                        # Save the screenshot data returned by JavaScript
                         img_data = screenshot_data.replace('data:image/png;base64,', '')
                         with open(screenshot_path, 'wb') as f:
                             f.write(base64.b64decode(img_data))
@@ -302,7 +307,7 @@ class WebUtils:
                 
             except WebDriverException as e:
                 if attempt < max_attempts - 1:
-                    # 重试前关闭并重新初始化驱动
+                    # Close and re-initialize the driver before retrying
                     self.close_browser()
                     time.sleep(2)
                     self.initialize_driver()
@@ -310,126 +315,126 @@ class WebUtils:
                         self.driver.get(self.current_url)
                         time.sleep(2)
                     continue
-                return False, f"截图失败 (尝试 {attempt+1}/{max_attempts}): {str(e)}"
+                return False, f"Screenshot failed (attempt {attempt+1}/{max_attempts}): {str(e)}"
             except Exception as e:
-                return False, f"截图处理失败: {str(e)}"
+                return False, f"Screenshot processing failed: {str(e)}"
         
-        return False, f"已尝试 {max_attempts} 次，均无法完成截图"
+        return False, f"Could not take the screenshot after {max_attempts} attempts"
     
     def close_browser(self):
-        """关闭浏览器"""
+        """Close the browser"""
         if self.driver:
             try:
                 self.driver.quit()
             except Exception as e:
-                print(f"关闭浏览器时发生错误: {str(e)}")
+                print(f"Error while closing the browser: {str(e)}")
             finally:
                 self.driver = None
                 self.cleanup_chrome_processes()
-                return True, "浏览器已关闭"
-        return False, "没有运行中的浏览器"
+                return True, "Browser closed"
+        return False, "No browser is running"
     
     def execute_script(self, script, *args):
-        """执行JavaScript代码"""
+        """Run JavaScript code"""
         try:
             if not self.driver:
-                return False, "浏览器未初始化或已关闭"
+                return False, "The browser is not initialized or has been closed"
                 
             result = self.driver.execute_script(script, *args)
             return True, result
         except Exception as e:
-            return False, f"执行脚本失败: {str(e)}"
+            return False, f"Failed to run script: {str(e)}"
     
     def get_page_title(self):
-        """获取当前页面标题"""
+        """Get the current page title"""
         try:
             if not self.driver:
-                return False, "浏览器未初始化或已关闭"
+                return False, "The browser is not initialized or has been closed"
                 
             return True, self.driver.title
         except Exception as e:
-            return False, f"获取标题失败: {str(e)}"
+            return False, f"Failed to get the title: {str(e)}"
     
     def find_element(self, selector, by=By.CSS_SELECTOR, timeout=10):
-        """查找单个元素"""
+        """Find a single element"""
         try:
             if not self.driver:
-                return False, "浏览器未初始化或已关闭"
+                return False, "The browser is not initialized or has been closed"
                 
             element = WebDriverWait(self.driver, timeout).until(
                 EC.presence_of_element_located((by, selector))
             )
             return True, element
         except TimeoutException:
-            return False, f"超时未找到元素: {selector}"
+            return False, f"Timed out finding element: {selector}"
         except NoSuchElementException:
-            return False, f"未找到元素: {selector}"
+            return False, f"Element not found: {selector}"
         except Exception as e:
-            return False, f"查找元素失败: {str(e)}"
+            return False, f"Failed to find element: {str(e)}"
     
     def click_element(self, selector, by=By.CSS_SELECTOR, timeout=10):
-        """点击指定元素"""
+        """Click the given element"""
         try:
             success, element = self.find_element(selector, by, timeout)
             if not success:
-                return False, element  # 传递错误信息
+                return False, element  # Pass the error message through
                 
-            # 确保元素可见并点击
+            # Make sure the element is visible, then click it
             WebDriverWait(self.driver, timeout).until(
                 EC.element_to_be_clickable((by, selector))
             ).click()
-            return True, f"已点击元素: {selector}"
+            return True, f"Clicked element: {selector}"
         except Exception as e:
-            return False, f"点击元素失败: {str(e)}"
+            return False, f"Failed to click element: {str(e)}"
     
     def input_text(self, selector, text, by=By.CSS_SELECTOR, timeout=10):
-        """在输入框中输入文本"""
+        """Type text into an input field"""
         try:
             success, element = self.find_element(selector, by, timeout)
             if not success:
-                return False, element  # 传递错误信息
+                return False, element  # Pass the error message through
                 
-            # 清除现有内容并输入新文本
+            # Clear the existing content and type the new text
             element.clear()
             element.send_keys(text)
-            return True, f"已在元素 {selector} 中输入文本"
+            return True, f"Typed text into element {selector}"
         except Exception as e:
-            return False, f"输入文本失败: {str(e)}"
+            return False, f"Failed to type text: {str(e)}"
     
     def get_element_text(self, selector, by=By.CSS_SELECTOR, timeout=10):
-        """获取元素的文本内容"""
+        """Get the text content of an element"""
         try:
             success, element = self.find_element(selector, by, timeout)
             if not success:
-                return False, element  # 传递错误信息
+                return False, element  # Pass the error message through
                 
             return True, element.text
         except Exception as e:
-            return False, f"获取元素文本失败: {str(e)}"
+            return False, f"Failed to get element text: {str(e)}"
     
     def scroll_to_bottom(self):
-        """滚动到页面底部"""
+        """Scroll to the bottom of the page"""
         try:
             if not self.driver:
-                return False, "浏览器未初始化或已关闭"
+                return False, "The browser is not initialized or has been closed"
                 
             self.driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
             time.sleep(1)
-            return True, "已滚动到页面底部"
+            return True, "Scrolled to the bottom of the page"
         except Exception as e:
-            return False, f"滚动失败: {str(e)}"
+            return False, f"Scroll failed: {str(e)}"
     
     def wait_for_page_load(self, timeout=30):
-        """等待页面完全加载"""
+        """Wait for the page to fully load"""
         try:
             if not self.driver:
-                return False, "浏览器未初始化或已关闭"
+                return False, "The browser is not initialized or has been closed"
                 
             WebDriverWait(self.driver, timeout).until(
                 lambda driver: driver.execute_script('return document.readyState') == 'complete'
             )
-            return True, "页面已完全加载"
+            return True, "Page fully loaded"
         except TimeoutException:
-            return False, "等待页面加载超时"
+            return False, "Timed out waiting for the page to load"
         except Exception as e:
-            return False, f"等待页面加载失败: {str(e)}"
+            return False, f"Failed waiting for the page to load: {str(e)}"
